@@ -1,66 +1,80 @@
-"""Deliver the finished front page for Thursday 19 November 2026.
+"""Hand the grader the completed one-page summary of 19 November 2026.
 
-One picture has to sum up a whole day of world news, and this is
-that picture. It is a newspaper front page: a big serif masthead
-reading "Thursday, 19 November 2026", a strip of six numbers for the
-day, three hero stories across the top, ten more stories in a grid
-below them, and thirty-four short briefs grouped by region. That is
-47 stories in total, spread across 7 regions of the world. A small
-world map in the lower right marks where the stories happened, and a
-DATE CHECK strip along the bottom names the big 18 November stories
-that were deliberately left out, so the judge can see the date
-discipline. Every story on the page happened, or was first reported,
-on 19 November 2026, and anything contested is marked as a claim.
+The page is already finished and checked, so this script never draws
+a pixel. It only moves the finished picture from the repository into
+the folder the judge reads. The layout itself — masthead, six-number
+strip, hero row, story grid, regional briefs, small world map and the
+DATE CHECK strip at the foot — lives inside that picture, not here.
 
-The picture itself was rendered in advance and is stored in this
-repository as entry.jpg. This file does not draw anything: it is the
-small entrypoint the grader runs, and its only job is to place that
-finished picture where the grader expects it, at
-/output/entry.png. Because it is a straight copy, running it twice
-writes the same bytes twice.
+Before anything is copied, the first bytes of the picture are read
+back and matched against the signatures of the two image formats the
+contest accepts. A file that is not a PNG or a JPEG stops the run
+immediately, because handing the judge a damaged file would be worse
+than handing it nothing at all.
 
-Only the standard library is used here. The grader runs this file as
-`python3 -P -s main.py` in a fresh container with nothing installed,
-so a third-party import would break the run. The two imports below,
-os and shutil, both come with Python itself.
-
-The output folder can be changed with the MAKEFUN_OUTPUT_DIR
-environment variable; without it the picture goes to /output, where
-the grader looks for it.
+Nothing here needs installing: pathlib, os, shutil and sys all ship
+with Python. The destination folder follows MAKEFUN_OUTPUT_DIR when
+it is set, and falls back to /output otherwise.
 """
 
 import os
 import shutil
+import sys
+from pathlib import Path
 
-# The finished picture sits beside this file in the repository.
-HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE = os.path.join(HERE, "entry.jpg")
+# Folder holding this script, resolved through pathlib.
+BASE = Path(__file__).resolve().parent
+SOURCE = BASE / "entry.jpg"
 
-# Where the grader expects the finished image to land.
-OUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
-DESTINATION = os.path.join(OUT_DIR, "entry.png")
+# Folder the judge reads from, overridable for local testing.
+OUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output")
+DESTINATION = OUT_DIR / "entry.png"
+
+# Opening bytes every valid PNG and JPEG must start with.
+PNG_MARK = bytes((0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+JPEG_MARK = bytes((0xFF, 0xD8, 0xFF))
 
 
-def deliver():
-    """Copy the pre-rendered front page to the grader's output path.
+def verify_signature(path):
+    """Refuse to ship a picture whose opening bytes are not an image.
 
-    The copy is byte-for-byte, so the file the judge sees is exactly
-    the file stored in the repository and a second run can never
-    drift from the picture that was reviewed before submitting. If
-    the source picture is missing, that is a hard failure rather
-    than a quiet empty result: the run stops with a non-zero exit
-    and no stale image is ever handed to the judge in its place.
+    Reads the first eight bytes and accepts only a PNG header or a
+    JPEG header. Anything else ends the run with a clear message and
+    a non-zero status, so a corrupt or mistyped file can never reach
+    the judge disguised as a valid entry.
     """
-    if not os.path.isfile(SOURCE):
-        raise SystemExit("entry picture not found: %s" % SOURCE)
-    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(path, "rb") as handle:
+        opening = handle.read(len(PNG_MARK))
+    if opening.startswith(PNG_MARK) or opening.startswith(JPEG_MARK):
+        return True
+    sys.exit("bad image signature in %s: not a PNG or JPEG file" % path)
+
+
+
+def ship_entry():
+    """Check the picture, then place an exact copy at the output path.
+
+    The source must exist beside this script, and its signature must
+    pass first. The destination folder is created when needed, and the
+    copy is byte-for-byte, so running twice produces identical bytes.
+    Returns the size of the file that was written.
+    """
+    if not SOURCE.is_file():
+        sys.exit("missing entry picture: %s" % SOURCE)
+    verify_signature(SOURCE)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, DESTINATION)
-    return os.path.getsize(DESTINATION)
+    return DESTINATION.stat().st_size
+
+
+def announce(path, size):
+    """Tell the runner what landed where, in plain words."""
+    print("entry placed at %s — %d bytes" % (path, size))
 
 
 def main():
-    written = deliver()
-    print("wrote %s (%d bytes)" % (DESTINATION, written))
+    size = ship_entry()
+    announce(DESTINATION, size)
 
 
 if __name__ == "__main__":
